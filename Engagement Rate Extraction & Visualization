@@ -1,0 +1,73 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+def create_plot(client_name):
+    """
+    Create a table and two line plots to visualize comment trends and engagement rate trends for a given client.
+
+    Args:
+        client_name (str): Name of the client.
+
+    Returns:
+        None
+    """
+    # Query to retrieve data from the database
+    query = f"""
+        SELECT COUNT(Post_URL) AS Total_Posts, SUM(Likes) AS Likes, SUM(Comments) AS Comments, SUM(Comments) + SUM(Likes) AS Total_Engagements, 
+        SUM(Followers) AS Followers_Reach, AVG(Engagement_Rate) AS ER, Client_Name,
+        EXTRACT(MONTH FROM Timestamp AT TIME ZONE "UTC") AS MONTH,
+        EXTRACT(YEAR FROM Timestamp AT TIME ZONE "UTC") AS YEAR
+        FROM `your_table` 
+        WHERE REGEXP_CONTAINS(Client_Name, "{client_name}") AND NOT Engagement_Rate = -1
+        GROUP BY Client_Name, Year, Month
+    """
+    
+    # Read data from BigQuery into a DataFrame
+    project_id = "your_projid"
+    df = pd.read_gbq(query, project_id)
+    
+    # Sort the DataFrame by Year and Month
+    df = df.sort_values(by=['YEAR', 'MONTH'])
+    
+    # Drop unnecessary columns
+    df = df.drop(['Total_Posts', 'Likes', 'Total_Engagements', 'Followers_Reach', 'Client_Name'], axis=1)
+    
+    # Rename columns
+    df = df.rename({'MONTH': 'Month', 'YEAR': 'Year'}, axis=1)
+    
+    # Round the ER column to two decimal places
+    df['ER'] = df['ER'].round(decimals=2)
+    
+    # Convert Month column to abbreviated month names
+    df['Month'] = pd.to_datetime(df['Month'], format='%m')
+    df['Month'] = df['Month'].dt.month_name().str[:3]
+    
+    # Create a Date column by combining Month and Year columns
+    df['Date'] = df['Month'].astype(str) + ', ' + df['Year'].astype(str)
+    
+    # Drop Month and Year columns
+    df = df.drop(['Month', 'Year'], axis=1)
+    
+    # Reorder columns
+    df = df[['Date', 'Comments', 'ER']]
+    
+    # Create a table plot
+    fig, ax = plt.subplots()
+    ax.axis('off')
+    ax.axis('tight')
+    table = ax.table(cellText=df.values, colWidths=[0.9] * len(df.columns), colLabels=df.columns, loc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    fig.tight_layout()
+    plt.show()
+
+    # Create line plots for comment trends and engagement rate trends
+    plot1 = df.plot(x='Date', y='Comments', title='Comment Trends', fontsize=7)
+    plot2 = df.plot(x='Date', y='ER', title='Engagement Rate Trends', fontsize=7)
+    
+    # Uncomment the following lines if you want to save the figures to a directory
+    # if not os.path.exists("tmp/images"):
+    #     os.makedirs("tmp/images")
+    # plt.savefig("tmp/images/fig1.png")
+    # print("Figures saved to memory")
