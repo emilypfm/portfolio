@@ -1,0 +1,193 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import chi2_contingency
+from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
+import json
+from datetime import date
+
+
+def convert_age(born):
+    today = date.today()
+    return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+
+# Read profile data from a Firestore export
+df = pd.read_gbq("SELECT * FROM `your_project_id.firestore_export.profile_data` WHERE NOT REGEXP_CONTAINS(email, 'example') and address_state != 'None' order by timestamp ASC", project_id="your_project_id")
+
+# Convert date of birth to age and create age range column
+df["Age"] = pd.to_datetime(df["dob"], errors="coerce").apply(convert_age)
+df.loc[(df["Age"] >= 18) & (df["Age"] < 35), "age_range"] = "18-35"
+df.loc[df["Age"] >= 35, "age_range"] = "35+"
+
+# Map address state to region
+region_mapping = {
+    'CT': 'Northeast Region',
+    'DE': 'Northeast Region',
+    'ME': 'Northeast Region',
+    'MD': 'Northeast Region',
+    'MA': 'Northeast Region',
+    'NH': 'Northeast Region',
+    'NJ': 'Northeast Region',
+    'NY': 'Northeast Region',
+    'PA': 'Northeast Region',
+    'RI': 'Northeast Region',
+    'VT': 'Northeast Region',
+    'AL': 'Southeast Region',
+    'AR': 'Southeast Region',
+    'FL': 'Southeast Region',
+    'GA': 'Southeast Region',
+    'KY': 'Southeast Region',
+    'LA': 'Southeast Region',
+    'MS': 'Southeast Region',
+    'NC': 'Southeast Region',
+    'SC': 'Southeast Region',
+    'TN': 'Southeast Region',
+    'VA': 'Southeast Region',
+    'WV': 'Southeast Region',
+    'IL': 'Midwest Region',
+    'IN': 'Midwest Region',
+    'IA': 'Midwest Region',
+    'KS': 'Midwest Region',
+    'MI': 'Midwest Region',
+    'MN': 'Midwest Region',
+    'MO': 'Midwest Region',
+    'NE': 'Midwest Region',
+    'ND': 'Midwest Region',
+    'OH': 'Midwest Region',
+    'SD': 'Midwest Region',
+    'WI': 'Midwest Region',
+    'AZ': 'Southwest Region',
+    'NM': 'Southwest Region',
+    'OK': 'Southwest Region',
+    'TX': 'Southwest Region',
+    'AK': 'West Region',
+    'CA': 'West Region',
+    'CO': 'West Region',
+    'HI': 'West Region',
+    'ID': 'West Region',
+    'MT': 'West Region',
+    'NV': 'West Region',
+    'OR': 'West Region',
+    'UT': 'West Region',
+    'WA': 'West Region',
+    'WY': 'West Region'
+}
+df["region"] = df["address_state"].map(region_mapping)
+
+# Read user campaign data
+user_campaign = pd.read_gbq("SELECT * FROM `your_project_id.user_campaign_data.user_campaign_data_raw_changelog`", project_id="your_project_id")
+user_campaign = user_campaign.drop_duplicates(subset="document_id", keep="last")
+
+# Merge profile data and user campaign data
+final = pd.merge(df, user_campaign, on="document_id", how='left')
+
+# Count the number of campaigns for each user
+final['campaign_count'] = final['data_y'].apply(lambda x: json.loads(x)['num_keys'] if pd.notnull(x) else None)
+
+# Categorize campaign count
+final['campaign_range'] = final['campaign_count'].apply(lambda x: '1+' if x and x >= 1 else '0')
+
+# Select target variables and features
+target_columns = ['paymentTier', 'raceEthnicity', 'campaign_range']
+X = final.drop(target_columns, axis=1)
+y = final[target_columns]
+
+# Print the number of samples in each class for each target variable
+for column in y.columns:
+    print(f"Target variable: {column}")
+    print(y[column].value_counts())
+
+# Plot Stratified Shuffle Split CV indices
+def plot_cv_indices(cv, X, y, groups, ax, n_splits, lw=10):
+    cmap = plt.cm.Blues
+    for i, (train_index, test_index) in enumerate(cv.split(X, y)):
+        indices = np.array([np.nan] * len(X))
+        indices[test_index] = 1
+        indices[train_index] = 0
+        ax.scatter(range(len(indices)), [i + 0.5] * len(indices),
+                   c=indices, marker='_', lw=lw, cmap=cmap,
+                   vmin=-.2, vmax=1.2)
+
+    ax.set(
+        yticks=np.arange(n_splits) + 0.5,
+        yticklabels=list(range(n_splits)),
+        xlabel='Sample index',
+        ylabel="StratifiedShuffleSplit",
+        ylim=[n_splits + 0.2, -0.2],
+        xlim=[0, len(X)]
+    )
+    ax.set_title('Stratified Shuffle Split')
+
+def cmap_cv(value):
+    # Define your color mapping function here
+    # You can customize the colors based on the value
+    # For example:
+    if value == 0.8:
+        return 'red'
+    elif value == 0.02:
+        return 'blue'
+    else:
+        return 'green'
+
+# Create a StratifiedShuffleSplit object with 2 splits and a test size of 50%
+sss = StratifiedShuffleSplit(n_splits=2, test_size=0.5, random_state=42)
+fig, ax = plt.subplots(figsize=(6, 3))
+plot_cv_indices(sss, X, y, groups, ax=ax, n_splits=2)
+
+ax.legend(
+    [Patch(color='blue')],
+    ["Testing set"],
+    loc=(1.02, 0.8),
+)
+# Make the legend fit
+plt.tight_layout()
+fig.subplots_adjust(right=0.7)
+plt.show()
+
+# Perform Stratified Shuffle Split
+for i, (train_index, test_index) in enumerate(sss.split(X, y)):
+    print(f"Split {i+1}")
+    
+    # Select the features and target variables for the current split
+    X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+    y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+    
+    # Combine the features and target variables into a single table for the current split
+    train_data = pd.concat([X_train, y_train], axis=1)
+    test_data = pd.concat([X_test, y_test], axis=1)
+    
+    # Print the number of samples in each class for each target variable
+    for column in y.columns:
+        print(f"Target variable: {column}")
+        print(train_data[column].value_counts()) 
+
+# Assign groups to train and test data
+train_data['Group'] = 'A'
+test_data['Group'] = 'B'
+
+# Balance variables
+balance_vars = ['paymentTier', 'raceEthnicity', 'campaign_range']
+
+# Convert paymentTier to string
+train_data['paymentTier'] = train_data['paymentTier'].astype(str)
+test_data['paymentTier'] = test_data['paymentTier'].astype(str)
+
+# Loop through balance_vars
+for var in balance_vars:
+    # Compute contingency table for variable and group 1
+    cont_table1 = pd.crosstab(train_data[var], train_data['Group'])
+
+    # Compute contingency table for variable and group 2
+    cont_table2 = pd.crosstab(test_data[var], test_data['Group'])
+
+    # Concatenate contingency tables
+    cont_table = pd.concat([cont_table1, cont_table2], axis=1, sort=False, keys=['Group 1', 'Group 2'])
+
+    # Compute chi-squared test
+    chi2_stat, p_value, dof, expected = chi2_contingency(cont_table)
+
+    # Print results
+    print(f'Test for balance on {var}: chi-squared statistic={chi2_stat:.2f}, p-value={p_value:.4f}')
+    
+final.to_csv("cp_data.csv", index=False)
