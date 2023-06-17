@@ -1,0 +1,78 @@
+import pandas as pd
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+import pandas_gbq
+from sklearn.metrics import roc_curve, auc
+
+# Function to select rows based on group and size
+def select_rows(df, group, size):
+    group_df = df[df['Group'] == group]
+    shuffled_df = group_df.sample(frac=1, random_state=42)
+    selected_rows = shuffled_df.head(size)
+    return pd.DataFrame(selected_rows)
+
+# Function to conduct logistic regression analysis and plot ROC curve
+def conduct_regression(df):
+    # Convert the relevant columns to appropriate data types
+    df[['raceEthnicity', 'paymentTier', 'campaign_range']] = df[['raceEthnicity', 'paymentTier', 'campaign_range']].astype('category')
+
+    dummy_variables = pd.get_dummies(df[['raceEthnicity', 'paymentTier', 'campaign_range']], drop_first=True)
+
+    # Concatenate the dummy variables with the response variable (Group)
+    X = sm.add_constant(dummy_variables)
+    y = df['Group']
+
+    # Fit the logistic regression model
+    logit_model = sm.Logit(y, X)
+    result = logit_model.fit()
+
+    # Print the summary of the logistic regression model
+    print(result.summary())
+
+    # Plot the coefficients
+    coef = result.params
+    variables = coef.index
+
+    plt.barh(variables, coef)
+    plt.xlabel('Coefficient Estimate')
+    plt.ylabel('Variables')
+    plt.title('Logistic Regression Coefficients')
+    plt.show()
+
+    # Calculate predicted probabilities
+    y_pred = result.predict(X)
+
+    # Calculate ROC curve and AUC
+    fpr, tpr, thresholds = roc_curve(y, y_pred)
+    roc_auc = auc(fpr, tpr)
+
+    # Plot ROC curve
+    plt.figure()
+    plt.plot(fpr, tpr, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+    plt.fill_between(fpr, tpr, color='lightblue', alpha=0.5)
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc="lower right")
+    plt.show()
+
+# Read the data from Google BigQuery
+df1 = pd.read_gbq("your_dataset.your_table_name", project_id="your_project_id")
+
+# Select rows for group 0 and size 1200
+group_0 = select_rows(df1, 0, 1200)
+
+# Select rows for group 1 and size 1000
+group_1 = select_rows(df1, 1, 1000)
+
+# Concatenate selected rows
+df2 = pd.concat([group_0, group_1])
+
+# Convert Group column to int
+df2['Group'] = df2['Group'].astype(int)
+
+# Call the conduct_regression function
+conduct_regression(df2)
